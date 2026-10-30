@@ -35,7 +35,7 @@ from .entities import EntityType, Registry
 from .llm import LLMClient, LLMError
 
 app = typer.Typer(
-    help="Anonymise documents (text, Markdown, DOCX, PDF) with a cloud or local LLM.",
+    help="Anonymise documents (text, Markdown, DOCX, PDF, emails) with a cloud or local LLM.",
     no_args_is_help=True,
     add_completion=False,
 )

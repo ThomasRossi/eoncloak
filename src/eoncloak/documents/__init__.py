@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Protocol
 
 from ..replace import Replacer
+from .mail import EmailDocument
 from .pdf import PdfDocument
 from .text import TextDocument, write_text
 from .word import DocxDocument, write_docx_from_text
@@ -28,6 +29,8 @@ class Document(Protocol):
 
 
 OUTPUT_SUFFIXES = {".txt", ".md", ".docx"}
+# Formats that cannot be written back; they are converted to text by default.
+TEXT_ONLY_SUFFIXES = {".pdf", ".eml", ".msg"}
 
 
 class UnsupportedFormat(Exception):
@@ -40,6 +43,8 @@ def load_document(path: Path) -> Document:
         return DocxDocument.load(path)
     if suffix == ".pdf":
         return PdfDocument.load(path)
+    if suffix in (".eml", ".msg"):
+        return EmailDocument.load(path)
     if suffix == ".doc":
         raise UnsupportedFormat(f"{path}: legacy .doc is not supported, save it as .docx first")
     return TextDocument.load(path)
@@ -47,7 +52,7 @@ def load_document(path: Path) -> Document:
 
 def default_output_suffix(source: Path) -> str:
     suffix = source.suffix.lower()
-    if suffix == ".pdf":
+    if suffix in TEXT_ONLY_SUFFIXES:
         return ".txt"
     return suffix if suffix in OUTPUT_SUFFIXES else ".txt"
 
@@ -66,6 +71,7 @@ def save_document(document: Document, path: Path) -> None:
 __all__ = [
     "Document",
     "DocxDocument",
+    "EmailDocument",
     "PdfDocument",
     "TextDocument",
     "UnsupportedFormat",

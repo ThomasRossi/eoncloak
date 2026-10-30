@@ -46,6 +46,13 @@ CLAUDE.local.md
 # mapping files contain the original personal data.
 *.map.json
 *.anon.*
+*.restored.*
+# Input documents and emails: tests generate their own, so none belong in the repo.
+*.msg
+*.eml
+*.pdf
+*.docx
+*.doc
 /samples/
 /private/
 !tests/fixtures/**

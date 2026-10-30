@@ -67,8 +67,9 @@ src/eoncloak/
   entities.py     entity types, the registry that keeps labels consistent, mapping files
   replace.py      finding and replacing surface forms
   anonymizer.py   the pipeline and the public Anonymizer API
-  documents/      loaders and writers per format (text, word, pdf)
+  documents/      loaders and writers per format (text, word, pdf, mail)
 tests/
+  msgbuilder.py   writes synthetic Outlook .msg files, so no real emails are needed
 ```
 
 ### Design principles

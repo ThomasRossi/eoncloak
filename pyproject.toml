@@ -1,7 +1,7 @@
 [project]
 name = "eoncloak"
 version = "0.1.0"
-description = "Anonymise documents (text, DOCX, PDF) with AI, using a cloud or a local LLM, keeping consistent pseudonyms."
+description = "Anonymise documents (text, DOCX, PDF, emails) with AI, using a cloud or a local LLM, keeping consistent pseudonyms."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -26,6 +26,7 @@ dependencies = [
     "python-docx>=1.1",
     "pypdf>=4.0",
     "phonenumbers>=8.13",
+    "olefile>=0.46",
 ]
 
 [project.urls]

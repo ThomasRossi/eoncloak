@@ -18,8 +18,9 @@ Mario Rossi (mario.rossi@acme.it) signed for ACME S.p.A. Rossi will call +39 02 
   Studio, NVIDIA NIM or any other OpenAI-compatible server (a DGX, a workstation, a lab
   box) with `--provider` / `--base-url`. `--local-only` guarantees text never leaves your
   network.
-- **Formats.** Input: `.txt`, `.md`, `.docx`, `.pdf` (text-based). Output: plain text,
-  Markdown or `.docx`. DOCX → DOCX keeps formatting, headers, footers, tables, comments.
+- **Formats.** Input: `.txt`, `.md`, `.docx`, `.pdf` (text-based), emails (`.eml`, Outlook
+  `.msg`). Output: plain text, Markdown or `.docx`. DOCX → DOCX keeps formatting, headers,
+  footers, tables, comments.
 - **Reversible if you want.** An optional mapping file lets you restore the originals.
 
 > **Status: alpha.** Always review the output before sharing it. No automatic tool catches
@@ -43,6 +44,9 @@ eoncloak anonymize contract.docx            # → contract.anon.docx
 # Local: Ollama on this machine
 eoncloak anonymize contract.pdf --provider ollama --model qwen3:14b --local-only
                                             # → contract.anon.txt
+
+# Emails (Outlook .msg or .eml) → text, or --to docx / --to md
+eoncloak anonymize inbox/*.msg -o anonymised/
 
 # Local: vLLM on a DGX on your network
 eoncloak anonymize *.docx --provider vllm --base-url http://dgx.lan:8000/v1 --local-only -o out/
@@ -124,7 +128,8 @@ save_mapping(anonymizer.registry, "case.map.json")
 ## How it works
 
 1. **Extract** the text (DOCX: body, tables, headers, footers, footnotes, comments,
-   tracked changes, hyperlinks, metadata; PDF: text layer).
+   tracked changes, hyperlinks, metadata; PDF: text layer; emails: From/To/Cc/Bcc/Reply-To,
+   Date, Subject, attachment names and the body, plain or HTML).
 2. **Detect language** with one short LLM call (or `--language`).
 3. **Detect entities**: rules for emails, phone numbers and IBANs; the LLM for names,
    organisations, addresses and identifiers. Long documents are processed in chunks, and
@@ -139,6 +144,10 @@ save_mapping(anonymizer.registry, "case.map.json")
 ## Limitations
 
 - Scanned PDFs (images without a text layer) need OCR, which is not supported yet.
+- Emails: attachments are listed by name but their contents are not anonymised; save them
+  and run eoncloak on them separately. Routing headers (Received, Message-ID, X-…) are
+  dropped from the output. Outlook messages whose body exists only as RTF are not supported
+  yet.
 - PDF output is not re-rendered as PDF: you get text, Markdown or DOCX.
 - DOCX: text inside images, charts and SmartArt is not processed.
 - Restoring maps each label back to the entity's fullest name ("Rossi" comes back as
@@ -149,6 +158,7 @@ save_mapping(anonymizer.registry, "case.map.json")
 
 - [ ] Re-render anonymised PDFs as PDF (in-place redaction)
 - [ ] OCR for scanned PDFs
+- [ ] Emails: anonymise attachments too; RTF-only Outlook bodies
 - [ ] Offline detector without an LLM server (e.g. GLiNER) for names
 - [ ] Evaluation set and per-model benchmark
 - [ ] Phase 2: a small local web UI (separate package, built on the Python API)
