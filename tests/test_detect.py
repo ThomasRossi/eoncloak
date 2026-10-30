@@ -50,8 +50,40 @@ def test_hallucinated_entities_dropped():
 
 
 def test_known_entities_passed_to_later_chunks(fake_llm):
-    text = "Mario Rossi signed.\n" + "filler text\n" * 20 + "Rossi left.\n"
+    text = "Mario Rossi signed.\n" + "".join(f"filler {i}\n" for i in range(20)) + "Rossi left.\n"
     known = [(EntityType.PERSON, "Mario Rossi")]
     LLMDetector(fake_llm, ALL_TYPES, chunk_chars=60).detect(text, "it", lambda: known, list)
     assert len(fake_llm.calls) > 1
     assert '"canonical": "Mario Rossi"' in fake_llm.calls[-1][1]
+
+
+def test_prompt_covers_company_ids_and_birth_dates():
+    from eoncloak.detect import LLMDetector, _system_prompt
+    from eoncloak.entities import ALL_TYPES
+
+    prompt = _system_prompt(LLMDetector(None, ALL_TYPES).types, "en")
+    assert "BIRTH_DATE" in prompt
+    assert "company registration numbers" in prompt
+    assert "VAT numbers" in prompt
+    # URLs are found by rules, not by the model.
+    assert "- URL:" not in prompt
+
+
+def test_unique_lines_drops_repeats_and_quoted_copies():
+    from eoncloak.detect import unique_lines
+
+    text = (
+        "Ciao Giulia,\n\nMario Rossi\nACME S.p.A.\n\n\n"
+        "> Ciao  giulia,\n>\n> Mario Rossi\n> ACME S.p.A.\nNuova riga\n"
+    )
+    assert unique_lines(text) == "Ciao Giulia,\n\nMario Rossi\nACME S.p.A.\n\nNuova riga"
+
+
+def test_repeated_signature_still_replaced_everywhere(settings, fake_llm):
+    from eoncloak import Anonymizer
+
+    signature = "Mario Rossi\nACME S.p.A.\n"
+    text = "Ciao Giulia,\n" + signature + "\n> Ciao Giulia,\n> " + signature.replace("\n", "\n> ")
+    result = Anonymizer(settings, llm=fake_llm).anonymize_text(text)
+    assert "Rossi" not in result.text and "ACME" not in result.text
+    assert result.text.count("[PERSON_1]") == 2

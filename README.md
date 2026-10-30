@@ -4,13 +4,14 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Anonymise documents with AI: names of people, companies, addresses, phone numbers, emails,
-IBANs and personal identifiers are replaced with consistent labels, so the same person is
+links, IBANs, dates of birth and identifiers of people and companies (tax codes, company and
+VAT numbers, ...) are replaced with consistent labels, so the same person is
 `[PERSON_1]` everywhere in a document, and across a set of documents too.
 
 ```text
-Mario Rossi (mario.rossi@acme.it) signed for ACME S.p.A. Rossi will call +39 02 1234 5678.
+John Doe (john.doe@example.com) signed for Acme Corp; Doe will call +44 20 7946 0958.
         ↓
-[PERSON_1] ([EMAIL_1]) signed for [ORG_1]. [PERSON_1] will call [PHONE_1].
+[PERSON_1] ([EMAIL_1]) signed for [ORG_1]; [PERSON_1] will call [PHONE_1].
 ```
 
 - **Any language.** The main language is detected automatically (defaults to English).
@@ -37,8 +38,8 @@ Requires Python 3.11+.
 ## Quick start
 
 ```bash
-# Cloud (default): OpenRouter
-export OPENROUTER_API_KEY=sk-or-...
+# Cloud (default): OpenRouter, key in ./.env (see below)
+echo 'OPENROUTER_API_KEY=sk-or-...' >> .env
 eoncloak anonymize contract.docx            # → contract.anon.docx
 
 # Local: Ollama on this machine
@@ -58,7 +59,7 @@ eoncloak restore out/report.anon.docx --mapping case42.map.json
 # Pipes
 cat notes.txt | eoncloak anonymize - > notes.anon.txt
 
-# No LLM at all: emails, phone numbers and IBANs only
+# No LLM at all: emails, links, phone numbers, IBANs, VAT numbers and labelled ids only
 eoncloak anonymize notes.txt --no-llm
 ```
 
@@ -85,20 +86,37 @@ all common local servers implement. A profile only sets the default address:
 If no model is given for a local server that serves exactly one model, that model is used.
 API keys can also be given via `EONCLOAK_API_KEY`.
 
+**API keys and `.env`.** eoncloak reads a `.env` file in the current directory (copy
+[`.env.example`](.env.example)), so keys don't have to be exported in your shell. Variables
+already set in the environment take precedence over the file, and the file is never
+loaded into the process environment. `.env` is in `.gitignore`; keep keys out of
+`eoncloak.toml`.
+
 **`--local-only`** resolves the endpoint and refuses to run unless every address is on
 loopback or a private network (10/8, 172.16/12, 192.168/16, Tailscale's 100.64/10, IPv6
 ULA). Without it, eoncloak prints a notice whenever text goes to a remote endpoint.
 
-Which local model? Larger is better at spotting names; 8–14B instruct models (Qwen, Gemma,
-Llama, Mistral families) work well, 30B+ is better on long or messy documents. Try yours on
-a sample with `eoncloak check` and a real (non-sensitive) document.
+**Thinking models.** Reasoning models (Qwen3, gpt-oss, ...) may think before answering,
+which is billed and slow but rarely finds more names. `--reasoning off` (or `reasoning =
+"off"` in the config) turns it off: on OpenRouter through its `reasoning` parameter, on
+vLLM, SGLang and llama.cpp through `chat_template_kwargs.enable_thinking`. Each reply is
+capped (`max_output_tokens`, 4096 with thinking off, otherwise 16384) so that a model stuck
+repeating itself can't run for minutes; a reply cut off at the cap is retried from scratch.
+
+**OpenRouter hosts.** Open models are served by many hosts, some at 4-bit precision. Set
+`openrouter_quantizations = ["fp8", "bf16"]` to skip those (closed models report
+`"unknown"`), and `openrouter_zdr = true` to allow only zero-data-retention hosts.
+
+Which model? See [Benchmarks](#benchmarks). Try yours on a sample with `eoncloak check` and a
+real (non-sensitive) document.
 
 ## Configuration
 
 `eoncloak init` writes an `eoncloak.toml` with every option. Settings are read from
 `./eoncloak.toml`, then `~/.config/eoncloak/config.toml`; environment variables
-(`EONCLOAK_PROVIDER`, `EONCLOAK_MODEL`, `EONCLOAK_BASE_URL`, `EONCLOAK_LOCAL_ONLY`,
-`EONCLOAK_LANGUAGE`) override the file, and command line flags override both.
+(`EONCLOAK_PROVIDER`, `EONCLOAK_MODEL`, `EONCLOAK_BASE_URL`, `EONCLOAK_REASONING`,
+`EONCLOAK_LOCAL_ONLY`, `EONCLOAK_LANGUAGE`), from `./.env` or the shell, override the
+file, and command line flags override both.
 
 ```toml
 [llm]
@@ -108,7 +126,7 @@ model = "Qwen/Qwen3-32B"
 
 [anonymize]
 local_only = true
-entities = ["PERSON", "ORG", "ADDRESS", "EMAIL", "PHONE", "IBAN", "ID"]
+entities = ["PERSON", "ORG", "ADDRESS", "EMAIL", "PHONE", "IBAN", "ID", "URL", "BIRTH_DATE"]
 label_format = "[{type}_{n}]"
 ```
 
@@ -121,7 +139,7 @@ anonymizer = Anonymizer(load_settings(provider="ollama", model="qwen3:14b", loca
 result = anonymizer.anonymize_file("contract.docx")  # writes contract.anon.docx
 print(result.output, result.language.language, result.leaks)
 
-text = anonymizer.anonymize_text("Mario Rossi wrote to mario@rossi.it").text
+text = anonymizer.anonymize_text("John Doe wrote to john.doe@example.com").text
 save_mapping(anonymizer.registry, "case.map.json")
 ```
 
@@ -131,15 +149,52 @@ save_mapping(anonymizer.registry, "case.map.json")
    tracked changes, hyperlinks, metadata; PDF: text layer; emails: From/To/Cc/Bcc/Reply-To,
    Date, Subject, attachment names and the body, plain or HTML).
 2. **Detect language** with one short LLM call (or `--language`).
-3. **Detect entities**: rules for emails, phone numbers and IBANs; the LLM for names,
-   organisations, addresses and identifiers. Long documents are processed in chunks, and
-   entities found so far are passed to each chunk, so "Mario Rossi", "Rossi" and "M. Rossi"
-   are linked to the same person.
+3. **Detect entities**: rules for emails, phone numbers, IBANs, VAT numbers, codici
+   fiscali, identifiers written after a label ("Company no.: 01234567", "P.IVA ...",
+   "HRB ...") and links (each whole link becomes `[URL_n]`, since links often carry names
+   and account ids; links that PDF extraction wrapped at a hyphen are followed onto the
+   next line); the LLM for names, organisations, addresses, identifiers and dates of
+   birth. The model reads each distinct line once, so the signatures, disclaimers and
+   quoted headers repeated in an email thread are not sent again (on a long thread this
+   halves the tokens). Long documents are processed in chunks, and entities found so far
+   are passed to each chunk, so "John Doe", "Doe" and "J. Doe" are linked to the same
+   person. Shorter forms are added automatically: "Acme Inc." also covers "Acme", and
+   "Northwind Ltd." also covers "Northwind Ltd".
 4. **Replace in code, not by the LLM.** The LLM only *lists* what it finds; eoncloak then
    replaces every occurrence of every known form itself. The rest of the text is never
    rewritten, and a mention the model missed in one chunk is still caught if it was found
    in another.
 5. **Leak check**: the written output is scanned again for any original value.
+
+## Benchmarks
+
+Accuracy on our internal test dataset: business documents in English and French (a report
+and a long email thread), with 113 hand-checked values that must disappear (people,
+organisations, addresses, emails, phone numbers, company and VAT numbers, other
+identifiers, links, dates of birth). Recall is the share of those values gone from the
+output. eoncloak `main`, October 2026, default settings, models reached through OpenRouter.
+
+| Model | Recall | Missed | Time | Tokens in / out | Approx. cost |
+|---|---|---|---|---|---|
+| `anthropic/claude-haiku-5.5` (default) | 99.1% | 1 / 113 | 91 s | 44k / 20k | $0.015 |
+| `google/gemma-4-26b-a4b-it` (open, 4B active) | 97.3% | 3 / 113 | 64 s | 26k / 6k | $0.004 |
+| `qwen/qwen3.8-27b`, `--reasoning off` (open, dense) | 97.3% | 3 / 113 | 122 s | 24k / 7k | $0.01 |
+
+- The misses are organisation names mentioned only in passing, or a first name alone.
+  All three models also replace some things the test doesn't require, such as public
+  authorities and product brands.
+- With thinking on, Qwen3.8 27B was about 28 times slower on the report and found no
+  more values; use `--reasoning off` for this task.
+- The open models were restricted to fp8/bf16 hosts (`openrouter_quantizations`). Without
+  that, some 4-bit hosts occasionally loop until the output cap, which turned one run
+  from about 2 minutes into 20.
+- Times are OpenRouter round trips and say little about local hardware. Gemma 4 26B-A4B
+  uses about 4B parameters per token, so on a single GPU or DGX it should be considerably
+  faster than the dense Qwen3.8 27B.
+
+Run the same comparison on your own documents with `scripts/benchmark.py` (see
+[CONTRIBUTING.md](CONTRIBUTING.md#benchmarking-models)); keep them in `private/`, which git
+ignores.
 
 ## Limitations
 
@@ -150,9 +205,16 @@ save_mapping(anonymizer.registry, "case.map.json")
   yet.
 - PDF output is not re-rendered as PDF: you get text, Markdown or DOCX.
 - DOCX: text inside images, charts and SmartArt is not processed.
-- Restoring maps each label back to the entity's fullest name ("Rossi" comes back as
-  "Mario Rossi").
+- Restoring maps each label back to the entity's fullest name ("Doe" comes back as
+  "John Doe").
 - Mapping files contain the original personal data. Store them like the originals.
+- **Anonymised in the GDPR sense?** Not automatically. Under GDPR Recital 26 (and the UK
+  ICO's "motivated intruder" test) data is anonymous only if nobody can re-identify people by
+  means reasonably likely to be used, including public registers. eoncloak removes direct
+  identifiers, but details it leaves in place can still single someone out when combined:
+  a company's incorporation date and business activity codes, a nationality, a job title, a
+  rare event. Review the output with that test in mind. While you keep the mapping file,
+  the output is pseudonymised, not anonymised.
 
 ## Roadmap
 

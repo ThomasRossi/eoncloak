@@ -63,7 +63,7 @@ src/eoncloak/
   config.py       settings, provider profiles, --local-only guard
   llm.py          OpenAI-compatible client, structured-output fallbacks
   detect.py       language detection, chunking, LLM entity detection, prompts
-  rules.py        regex/validator detectors (email, phone, IBAN)
+  rules.py        regex/validator detectors (email, link, phone, IBAN)
   entities.py     entity types, the registry that keeps labels consistent, mapping files
   replace.py      finding and replacing surface forms
   anonymizer.py   the pipeline and the public Anonymizer API
@@ -71,6 +71,17 @@ src/eoncloak/
 tests/
   msgbuilder.py   writes synthetic Outlook .msg files, so no real emails are needed
 ```
+
+### Benchmarking models
+
+`scripts/benchmark.py` runs several models over a folder of documents and reports recall
+against hand-checked answer keys, missed and extra values, time and tokens. Keep the
+documents in `private/` (ignored by git) and API keys in `.env` (copy `.env.example`). See
+the docstring at the top of the script. Useful options: `--glob "*.txt"` to pick documents,
+`--bootstrap-expected` to draft answer keys, `--rescore runs/<timestamp>` to score saved
+outputs again after editing a key, `--quantizations fp8,bf16` to avoid 4-bit OpenRouter
+hosts, and a `#off` suffix on a model (`-m openrouter:qwen/qwen3.8-27b#off`) to turn its
+thinking off. Never commit documents, answer keys or mapping files: they hold real data.
 
 ### Design principles
 

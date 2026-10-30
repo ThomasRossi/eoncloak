@@ -8,7 +8,7 @@ from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-from eoncloak import Anonymizer, load_document, load_mapping, restore_document
+from eoncloak import Anonymizer, EntityType, load_document, load_mapping, restore_document
 from eoncloak.config import ConfigError, load_settings
 from eoncloak.documents import TextDocument
 
@@ -211,3 +211,15 @@ def test_text_document_preserves_line_endings(tmp_path):
     path = tmp_path / "crlf.txt"
     path.write_bytes(b"line one\r\nline two\r\n")
     assert TextDocument.load(path).text() == "line one\r\nline two\r\n"
+
+
+def test_links_and_short_company_forms(settings, fake_llm):
+    fake_llm.entities["NORTHWIND TRADING LTD."] = (EntityType.ORG, "NORTHWIND TRADING LTD.")
+    text = (
+        "A label reads NORTHWIND TRADING LTD.\nThe name NORTHWIND TRADING LTD, and the site\n"
+        "https://www.example.co.uk/traders/northwind-\n100200?q=x lead to NORTHWIND TRADING.\n"
+    )
+    result = Anonymizer(settings, llm=fake_llm).anonymize_text(text)
+    assert result.text == (
+        "A label reads [ORG_1]\nThe name [ORG_1], and the site\n[URL_1] lead to [ORG_1].\n"
+    )

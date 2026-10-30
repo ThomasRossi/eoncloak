@@ -22,6 +22,8 @@ class EntityType(StrEnum):
     PHONE = "PHONE"
     IBAN = "IBAN"
     ID = "ID"
+    URL = "URL"
+    BIRTH_DATE = "BIRTH_DATE"
 
 
 ALL_TYPES: tuple[EntityType, ...] = tuple(EntityType)
@@ -61,6 +63,39 @@ def _min_word_chars(text: str) -> int:
     return sum(ch.isalnum() for ch in text)
 
 
+# Legal forms that may be left out when a company is mentioned again ("ACME Ltd" -> "ACME").
+# fmt: off
+_LEGAL_FORMS = [
+    "limited", "ltd", "llc", "llp", "plc", "inc", "incorporated", "corp", "corporation",
+    "gmbh", "ag", "kg", "sa", "sas", "sarl", "srl", "spa", "sagl", "bv", "nv", "oy", "oyj",
+    "ab", "as", "a/s", "aps", "sl", "pty", "pte",
+]
+# fmt: on
+_LEGAL_SUFFIX_RE = re.compile(
+    r"(?:[\s,]+(?:"
+    + "|".join(r"\.?".join(map(re.escape, form)) for form in _LEGAL_FORMS)
+    + r")\.?)+$",
+    re.IGNORECASE,
+)
+
+
+def alias_variants(etype: EntityType, surface: str) -> list[str]:
+    """Shorter ways of writing the same entity that detectors often miss.
+
+    "NORTHWIND LTD." also appears as "NORTHWIND LTD," and "BLUE HERON LTD" as "BLUE HERON".
+    """
+    if etype in (EntityType.EMAIL, EntityType.URL, EntityType.PHONE, EntityType.IBAN):
+        return []
+    variants = []
+    if surface.endswith("."):
+        variants.append(surface.rstrip(". "))
+    if etype is EntityType.ORG:
+        base = _LEGAL_SUFFIX_RE.sub("", surface).rstrip(" ,&")
+        if base != surface and _min_word_chars(base) >= 3:
+            variants.append(base)
+    return [v for v in dict.fromkeys(variants) if v != surface and _min_word_chars(v) >= 2]
+
+
 class Registry:
     """Maps every surface form to a single entity so repeated mentions share one label.
 
@@ -89,6 +124,10 @@ class Registry:
                 return "phone:" + re.sub(r"\D", "", text)
         if etype is EntityType.IBAN:
             return "iban:" + re.sub(r"\s", "", text).upper()
+        if etype is EntityType.URL:
+            # http/https, "www." and a trailing slash don't make it a different link.
+            url = re.sub(r"^(?:[a-z]+://)?(?:www\.)?", "", re.sub(r"\s", "", text), flags=re.I)
+            return "url:" + url.rstrip("/").casefold()
         return re.sub(r"\s+", " ", text).casefold()
 
     # -- building ----------------------------------------------------------------------
@@ -105,6 +144,10 @@ class Registry:
             entity = self._new_entity(mention.type, (mention.canonical or surface).strip())
         self._by_key.setdefault(key, entity)
         entity.aliases.add(surface)
+        for variant in alias_variants(mention.type, surface):
+            # A variant never takes over a form that already belongs to another entity.
+            if self._by_key.setdefault(self.key(mention.type, variant), entity) is entity:
+                entity.aliases.add(variant)
         return entity
 
     def add_all(self, mentions: Iterable[Mention]) -> None:
@@ -123,7 +166,7 @@ class Registry:
 
     def known(self) -> list[tuple[EntityType, str]]:
         """Entities found so far, as (type, canonical) pairs, for prompting the LLM."""
-        return [(e.type, e.canonical) for e in self.entities]
+        return [(e.type, e.canonical) for e in self.entities if e.type is not EntityType.URL]
 
     def replacements(self) -> dict[str, str]:
         """Every surface form mapped to its label."""

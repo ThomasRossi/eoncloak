@@ -1,6 +1,6 @@
 import pytest
 
-from eoncloak.entities import EntityType, Mention, Registry
+from eoncloak.entities import EntityType, Mention, Registry, alias_variants
 
 
 def test_aliases_link_through_canonical():
@@ -58,3 +58,40 @@ def test_mapping_round_trip_continues_numbering():
 def test_mapping_version_checked():
     with pytest.raises(ValueError):
         Registry.from_mapping({"version": 99, "entities": []})
+
+
+@pytest.mark.parametrize(
+    ("surface", "variants"),
+    [
+        ("NORTHWIND TRADING LTD.", ["NORTHWIND TRADING LTD", "NORTHWIND TRADING"]),
+        ("BLUE HERON LTD", ["BLUE HERON"]),
+        ("ACME S.p.A.", ["ACME S.p.A", "ACME"]),
+        ("Northwind Pty Ltd", ["Northwind"]),
+        ("Ltd", []),
+        ("Mario Rossi", []),
+    ],
+)
+def test_org_variants(surface, variants):
+    assert alias_variants(EntityType.ORG, surface) == variants
+
+
+def test_variants_registered_but_never_steal():
+    reg = Registry()
+    person = reg.add(Mention("Heron", EntityType.PERSON))
+    org = reg.add(Mention("BLUE HERON LTD", EntityType.ORG))
+    reg.add(Mention("Blue Ltd", EntityType.ORG, "BLUE HERON LTD"))
+    replacements = reg.replacements()
+    assert replacements["BLUE HERON"] == org.label
+    assert replacements["Heron"] == person.label
+    # "Blue" alone has only four characters but is still a distinct company form.
+    assert replacements["Blue"] == org.label
+    assert alias_variants(EntityType.EMAIL, "a@b.co.") == []
+
+
+def test_same_link_with_or_without_scheme():
+    reg = Registry()
+    a = reg.add(Mention("http://www.EXAMPLE-law.com", EntityType.URL))
+    b = reg.add(Mention("https://www.example-law.com/", EntityType.URL))
+    c = reg.add(Mention("https://www.example-law.com/contact", EntityType.URL))
+    assert a is b
+    assert c is not a

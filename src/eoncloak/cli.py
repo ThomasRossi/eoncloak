@@ -60,6 +60,10 @@ ModelOpt = Annotated[str | None, typer.Option(help="Model name.", show_default=F
 BaseUrlOpt = Annotated[
     str | None, typer.Option(help="OpenAI-compatible endpoint, e.g. http://dgx:8000/v1.")
 ]
+ReasoningOpt = Annotated[
+    str | None,
+    typer.Option(help="Model thinking: default, off, low, medium, high.", show_default=False),
+]
 LocalOnlyOpt = Annotated[
     bool | None,
     typer.Option(
@@ -136,9 +140,10 @@ def anonymize(
     provider: ProviderOpt = None,
     model: ModelOpt = None,
     base_url: BaseUrlOpt = None,
+    reasoning: ReasoningOpt = None,
     local_only: LocalOnlyOpt = None,
     no_llm: Annotated[
-        bool, typer.Option("--no-llm", help="Rules only (emails, phones, IBANs); no LLM.")
+        bool, typer.Option("--no-llm", help="Rules only (emails, links, phones, IBANs); no LLM.")
     ] = False,
     language: Annotated[
         str | None, typer.Option(help="ISO 639-1 code; default: detected automatically.")
@@ -164,6 +169,7 @@ def anonymize(
         provider=provider,
         model=model,
         base_url=base_url,
+        reasoning=reasoning,
         local_only=local_only,
         use_llm=False if no_llm else None,
         language=language,
@@ -261,12 +267,18 @@ def check(
     provider: ProviderOpt = None,
     model: ModelOpt = None,
     base_url: BaseUrlOpt = None,
+    reasoning: ReasoningOpt = None,
     local_only: LocalOnlyOpt = None,
     config: ConfigOpt = None,
 ) -> None:
     """Show the effective LLM configuration and test the connection with a short sample."""
     settings = _settings(
-        config, provider=provider, model=model, base_url=base_url, local_only=local_only
+        config,
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        reasoning=reasoning,
+        local_only=local_only,
     )
     llm_settings = settings.llm
     url = llm_settings.resolved_base_url()

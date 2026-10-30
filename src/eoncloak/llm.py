@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
+from dataclasses import dataclass, field
 from typing import Protocol, TypeVar
 
 import openai
@@ -23,6 +25,29 @@ _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$")
 
 class LLMError(Exception):
     pass
+
+
+@dataclass
+class Usage:
+    """Tokens and requests used by a client, as reported by the server."""
+
+    requests: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    # Replies cut off at max_output_tokens, and which host answered (OpenRouter reports it).
+    truncated: int = 0
+    providers: Counter[str] = field(default_factory=Counter)
+
+    def add(self, response: object) -> None:
+        self.requests += 1
+        usage = getattr(response, "usage", None)
+        self.prompt_tokens += getattr(usage, "prompt_tokens", 0) or 0
+        self.completion_tokens += getattr(usage, "completion_tokens", 0) or 0
+        if getattr(response.choices[0], "finish_reason", None) == "length":
+            self.truncated += 1
+        provider = (getattr(response, "model_extra", None) or {}).get("provider")
+        if provider:
+            self.providers[provider] += 1
 
 
 class JSONModel(Protocol):
@@ -47,7 +72,7 @@ class LLMClient:
         headers = {}
         if settings.provider == "openrouter":
             if not settings.resolved_api_key():
-                raise LLMError("OpenRouter needs an API key: set OPENROUTER_API_KEY")
+                raise LLMError("OpenRouter needs an API key: put OPENROUTER_API_KEY in ./.env")
             headers = {"X-OpenRouter-Title": "eoncloak"}
         self._client = openai.OpenAI(
             base_url=self.base_url,
@@ -58,7 +83,10 @@ class LLMClient:
             default_headers=headers,
         )
         self._mode: StructuredOutput = settings.structured_output
+        self._temperature = settings.temperature
+        self._truncated = False
         self._model = settings.model or settings.profile.default_model
+        self.usage = Usage()
 
     @property
     def model(self) -> str:
@@ -94,6 +122,10 @@ class LLMClient:
                 return parse_json_reply(content, schema)
             except (ValueError, ValidationError) as exc:
                 last_error = exc
+                if self._truncated:
+                    # The reply hit max_output_tokens (usually a model repeating itself):
+                    # ask again from scratch instead of sending the runaway text back.
+                    continue
                 messages = [
                     *messages,
                     {"role": "assistant", "content": content},
@@ -109,27 +141,39 @@ class LLMClient:
         modes: list[StructuredOutput] = (
             ["json_schema", "json_object", "none"] if self._mode == "auto" else [self._mode]
         )
-        for i, mode in enumerate(modes):
+        temperatures = list(dict.fromkeys([self._temperature, None]))
+        attempts = [(mode, temp) for mode in modes for temp in temperatures]
+        for i, (mode, temperature) in enumerate(attempts):
             try:
                 response = self._client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    temperature=self.settings.temperature,
-                    **self._request_extras(mode, schema),
+                    **self._request_extras(mode, schema, temperature),
                 )
-            except openai.BadRequestError as exc:
-                # The server rejected this response_format; fall back to a simpler mode.
-                if i == len(modes) - 1:
+            except (openai.BadRequestError, openai.NotFoundError) as exc:
+                # A parameter was rejected (OpenRouter answers 404 when no provider accepts
+                # them all): retry without temperature, which some models refuse, then with
+                # a simpler response_format.
+                if i == len(attempts) - 1:
                     raise LLMError(f"request to {self.base_url} was rejected: {exc}") from exc
                 continue
             except openai.OpenAIError as exc:
                 raise LLMError(f"request to {self.base_url} failed: {exc}") from exc
-            self._mode = mode
-            return response.choices[0].message.content or ""
+            self._mode, self._temperature = mode, temperature
+            self.usage.add(response)
+            choice = response.choices[0]
+            self._truncated = getattr(choice, "finish_reason", None) == "length"
+            return choice.message.content or ""
         raise AssertionError("unreachable")
 
-    def _request_extras(self, mode: StructuredOutput, schema: type[BaseModel]) -> dict:
+    def _request_extras(
+        self, mode: StructuredOutput, schema: type[BaseModel], temperature: float | None
+    ) -> dict:
         extras: dict = {}
+        extra_body: dict = {}
+        if temperature is not None:
+            extras["temperature"] = temperature
+        extras["max_tokens"] = self.settings.resolved_max_output_tokens()
         if mode == "json_schema":
             extras["response_format"] = {
                 "type": "json_schema",
@@ -141,13 +185,26 @@ class LLMClient:
             }
         elif mode == "json_object":
             extras["response_format"] = {"type": "json_object"}
+        reasoning = self.settings.reasoning
         if self.settings.provider == "openrouter":
             provider: dict = {"data_collection": self.settings.openrouter_data_collection}
             if self.settings.openrouter_zdr:
                 provider["zdr"] = True
+            if self.settings.openrouter_quantizations:
+                provider["quantizations"] = self.settings.openrouter_quantizations
             if mode == "json_schema":
                 provider["require_parameters"] = True
-            extras["extra_body"] = {"provider": provider}
+            extra_body["provider"] = provider
+            if reasoning == "off":
+                extra_body["reasoning"] = {"enabled": False}
+            elif reasoning != "default":
+                extra_body["reasoning"] = {"effort": reasoning}
+        elif reasoning == "off":
+            extra_body["chat_template_kwargs"] = {"enable_thinking": False}
+        elif reasoning != "default":
+            extras["reasoning_effort"] = reasoning
+        if extra_body:
+            extras["extra_body"] = extra_body
         return extras
 
 

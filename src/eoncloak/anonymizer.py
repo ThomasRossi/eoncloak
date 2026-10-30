@@ -81,7 +81,7 @@ class Anonymizer:
 
         self.registry.add_all(detect_rules(text, types, info.country))
         if self.llm is not None:
-            LLMDetector(self.llm, types, options.chunk_chars).detect(
+            LLMDetector(self.llm, types, options.chunk_chars, options.skip_repeated_lines).detect(
                 text, info.language, self.registry.known, self.registry.add_all, self.on_progress
             )
 

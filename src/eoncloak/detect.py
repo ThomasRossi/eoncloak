@@ -32,8 +32,18 @@ TYPE_GUIDE = {
     EntityType.PHONE: "telephone and fax numbers in any format.",
     EntityType.IBAN: "IBANs and bank account numbers.",
     EntityType.ID: (
-        "personal identifiers: national ID and tax codes, social security numbers, passport, "
-        "driving licence, VAT numbers, licence plates, customer or case numbers tied to a person."
+        "identifiers of people AND of companies, i.e. anything that can be looked up in a "
+        "register or database: company registration numbers (UK company number, REA, HRB, "
+        "SIREN/SIRET, KvK, ...), VAT numbers and tax codes (partita IVA, codice fiscale, "
+        "USt-IdNr, EIN, ...), national ID, social security, passport and driving licence "
+        "numbers, licence plates, customer, account, officer, trader, case and file numbers, "
+        "shipping and invoice references (bills of lading, container numbers). Just the "
+        'identifier itself, without its label ("01234567", not "Company no.: 01234567").'
+    ),
+    EntityType.BIRTH_DATE: (
+        "dates of birth, also partial ones: a month and year or a year alone given as when "
+        'someone was born ("Born September 1961" -> "September 1961"). Just the date, '
+        'without words like "born". Not other dates.'
     ),
 }
 
@@ -78,6 +88,25 @@ def detect_language(llm: JSONModel, text: str) -> LanguageInfo:
     )
 
 
+def unique_lines(text: str) -> str:
+    """``text`` without lines that already appeared earlier.
+
+    Email threads repeat signatures, disclaimers and quoted headers many times. Lines are
+    compared ignoring spacing, case and the ``>`` quote marks of plain-text replies. Only what
+    the model reads is shortened: replacement still runs over the whole document.
+    """
+    seen: set[str] = set()
+    lines: list[str] = []
+    for line in text.splitlines():
+        key = re.sub(r"\s+", " ", line.lstrip("> \t")).strip().casefold()
+        if key in seen or (not key and lines and not lines[-1].strip()):
+            continue
+        if key:
+            seen.add(key)
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def chunk_text(text: str, max_chars: int) -> Iterator[str]:
     """Split on line boundaries into chunks of at most ``max_chars`` (long lines on spaces)."""
     buf: list[str] = []
@@ -117,6 +146,8 @@ Rules:
 - "canonical" is the fullest name of the same real-world entity. If it matches one of the
   KNOWN ENTITIES, copy that canonical exactly so the mentions stay linked.
 - When in doubt, include it: a missed name is worse than an extra one.
+- Identifiers of companies count too: a company number or VAT number leads straight to the
+  people behind the company in public registers.
 - Do not invent entities that are not in the text.
 
 Reply with JSON only: {{"entities": [{{"text": "...", "type": "...", "canonical": "..."}}]}}"""
@@ -135,10 +166,17 @@ def _appears_in(needle: str, haystack: str) -> bool:
 
 
 class LLMDetector:
-    def __init__(self, llm: JSONModel, types: Collection[EntityType], chunk_chars: int = 6000):
+    def __init__(
+        self,
+        llm: JSONModel,
+        types: Collection[EntityType],
+        chunk_chars: int = 6000,
+        skip_repeated_lines: bool = True,
+    ):
         self.llm = llm
         self.types = [t for t in TYPE_GUIDE if t in types]
         self.chunk_chars = chunk_chars
+        self.skip_repeated_lines = skip_repeated_lines
 
     def detect(
         self,
@@ -153,6 +191,8 @@ class LLMDetector:
         if not self.types:
             return
         system = _system_prompt(self.types, language)
+        if self.skip_repeated_lines:
+            text = unique_lines(text)
         chunks = [c for c in chunk_text(text, self.chunk_chars) if c.strip()]
         for i, chunk in enumerate(chunks):
             reply = self.llm.complete_json(system, _user_prompt(chunk, known()), EntitiesReply)

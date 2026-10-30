@@ -1,6 +1,14 @@
+import os
+
 import pytest
 
-from eoncloak.config import ConfigError, check_local_only, is_local_url, load_settings
+from eoncloak.config import (
+    ConfigError,
+    check_local_only,
+    is_local_url,
+    load_settings,
+    read_env_file,
+)
 
 
 def test_defaults(settings):
@@ -20,6 +28,30 @@ def test_precedence_file_env_override(settings, tmp_path, monkeypatch):
     monkeypatch.setenv("EONCLOAK_MODEL", "from-env")
     assert load_settings().llm.model == "from-env"
     assert load_settings(model="from-flag").llm.model == "from-flag"
+
+
+def test_env_file(settings, tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("EONCLOAK_API_KEY", raising=False)
+    (tmp_path / ".env").write_text(
+        "# keys\nexport OPENROUTER_API_KEY='sk-or-from-file'\nEONCLOAK_MODEL=from-dotenv # c\n"
+    )
+    loaded = load_settings()
+    assert loaded.llm.resolved_api_key() == "sk-or-from-file"
+    assert loaded.llm.model == "from-dotenv"
+    assert "sk-or" not in repr(loaded)
+    # The file does not leak into the process environment, and real variables win.
+    assert "OPENROUTER_API_KEY" not in os.environ
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-from-env")
+    assert load_settings().llm.resolved_api_key() == "sk-or-from-env"
+    # Local providers don't pick up the OpenRouter key.
+    assert load_settings(provider="ollama").llm.api_key is None
+
+
+def test_read_env_file(tmp_path):
+    path = tmp_path / ".env"
+    path.write_text('A=1\nB="two words"\nC = x # comment\nnot a pair\nD=a#b\nE=\n')
+    assert read_env_file(path) == {"A": "1", "B": "two words", "C": "x", "D": "a#b", "E": ""}
 
 
 def test_unknown_provider(settings):
