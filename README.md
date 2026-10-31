@@ -3,54 +3,74 @@
 [![CI](https://github.com/ThomasRossi/eoncloak/actions/workflows/ci.yml/badge.svg)](https://github.com/ThomasRossi/eoncloak/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Anonymise documents with AI: names of people, companies, addresses, phone numbers, emails,
-links, IBANs, dates of birth and identifiers of people and companies (tax codes, company and
-VAT numbers, ...) are replaced with consistent labels, so the same person is
-`[PERSON_1]` everywhere in a document, and across a set of documents too.
+**Anonymise confidential documents with AI, without them leaving your network.**
+
+Built for legal, compliance and investigation work, where files are covered by professional
+secrecy and GDPR. eoncloak runs on small local models and replaces people, companies,
+addresses, emails, phone numbers, links, IBANs, dates of birth and identifiers of people and
+companies (tax codes, company and VAT numbers, ...) with consistent labels: the same person
+is `[PERSON_1]` everywhere in a document, and across a set of documents.
 
 ```text
-John Doe (john.doe@example.com) signed for Acme Corp; Doe will call +44 20 7946 0958.
+John Doe (born 12 March 1961, john.doe@example.com) is director of Acme Trading Ltd,
+company no. 01234567, VAT GB123456789. Doe will call +44 20 7946 0958.
         ↓
-[PERSON_1] ([EMAIL_1]) signed for [ORG_1]; [PERSON_1] will call [PHONE_1].
+[PERSON_1] (born [BIRTH_DATE_1], [EMAIL_1]) is director of [ORG_1],
+company no. [ID_2], VAT [ID_1]. [PERSON_1] will call [PHONE_1].
 ```
-
-- **Any language.** The main language is detected automatically (defaults to English).
-- **Cloud or local LLM, one switch.** OpenRouter by default; Ollama, llama.cpp, vLLM, LM
-  Studio, NVIDIA NIM or any other OpenAI-compatible server (a DGX, a workstation, a lab
-  box) with `--provider` / `--base-url`. `--local-only` guarantees text never leaves your
-  network.
-- **Formats.** Input: `.txt`, `.md`, `.docx`, `.pdf` (text-based), emails (`.eml`, Outlook
-  `.msg`). Output: plain text, Markdown or `.docx`. DOCX → DOCX keeps formatting, headers,
-  footers, tables, comments.
-- **Reversible if you want.** An optional mapping file lets you restore the originals.
-
-> **Status: alpha.** Always review the output before sharing it. No automatic tool catches
-> 100% of personal data.
-
-## Install
-
-```bash
-pip install eoncloak          # or: uv tool install eoncloak / pipx install eoncloak
-```
-
-Requires Python 3.11+.
 
 ## Quick start
 
 ```bash
-# Cloud (default): OpenRouter, key in ./.env (see below)
-echo 'OPENROUTER_API_KEY=sk-or-...' >> .env
-eoncloak anonymize contract.docx            # → contract.anon.docx
+pip install eoncloak          # or: uv tool install eoncloak / pipx install eoncloak
+eoncloak anonymize contract.docx --provider ollama --model qwen3:14b --local-only
+                              # → contract.anon.docx
+```
 
+Requires Python 3.11+ and, for local use, a model server such as
+[Ollama](https://ollama.com). More examples [below](#usage).
+
+## Features
+
+- **Local first.** Works with Ollama, llama.cpp, vLLM, LM Studio, NVIDIA NIM or any other
+  OpenAI-compatible server (a DGX, a workstation, a lab box). `--local-only` guarantees
+  text never leaves your network. Cloud models through OpenRouter are also supported, and
+  are what eoncloak uses when no provider is configured: set `provider` and `local_only`
+  once in [`eoncloak.toml`](#configuration) to make local the default.
+- **Any language.** The main language is detected automatically, with English as the
+  fallback when detection fails.
+- **Formats.** Input: `.txt`, `.md`, `.docx`, `.pdf` (text-based), emails (`.eml`, Outlook
+  `.msg`). Output: plain text, Markdown or `.docx`. DOCX → DOCX keeps formatting, headers,
+  footers, tables and comments.
+- **Reversible if you want.** An optional mapping file lets you restore the originals.
+  While the mapping exists, the output is pseudonymised, not anonymised, data under GDPR:
+  it is still personal data, so keep the mapping as secure as the originals.
+- **Consistent labels, by choice.** Documents processed in one run, or with the same
+  mapping file, share labels, so `[PERSON_1]` is the same person in all of them. That
+  keeps a case file readable, but it also makes the documents linkable to each other;
+  process them separately when that matters.
+
+> **Status: alpha.** Always review the output before sharing it. No automatic tool catches
+> 100% of personal data, and contextual details eoncloak leaves in place (dates, places,
+> nationality, job titles, case references) can still identify people. See
+> [Limitations](#limitations).
+
+## Usage
+
+```bash
 # Local: Ollama on this machine
 eoncloak anonymize contract.pdf --provider ollama --model qwen3:14b --local-only
                                             # → contract.anon.txt
 
-# Emails (Outlook .msg or .eml) → text, or --to docx / --to md
-eoncloak anonymize inbox/*.msg -o anonymised/
-
 # Local: vLLM on a DGX on your network
 eoncloak anonymize *.docx --provider vllm --base-url http://dgx.lan:8000/v1 --local-only -o out/
+
+# Cloud: OpenRouter, key in ./.env (see below)
+echo 'OPENROUTER_API_KEY=sk-or-...' >> .env
+eoncloak anonymize contract.docx            # → contract.anon.docx
+
+# Emails (Outlook .msg or .eml) → text, or --to docx / --to md
+eoncloak anonymize inbox/*.msg -o anonymised/
 
 # Same labels across a case file, and restore later
 eoncloak anonymize case/*.pdf --to docx --mapping case42.map.json
